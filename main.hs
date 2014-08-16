@@ -81,14 +81,23 @@ download absLink = do
        Just _content -> do
           B.writeFile name _content--(B.pack _content)
 
-crawlPaperFromIndex :: Int -> IO Bool 
+crawlPaperFromIndex :: Int -> IO [String] 
 crawlPaperFromIndex index = do
   let urlToCrawl = if (index == 0) then (baseUrlToCrawl) else (baseUrlToCrawl ++ "&startat=" ++ (show index))
   doc <- get urlToCrawl 
   links <- runX . paperAbsLinks $ doc
-  --mapM_ download links
+  return links
+
+getAllLinks :: [Int] -> IO [String]
+getAllLinks [] = return []
+getAllLinks indexList = do
+    let index = head indexList
+    putStrLn $ "crawling index : " ++ (show index)
+    links <- crawlPaperFromIndex index
+    links2 <- getAllLinks (tail indexList)
+    return (links++links2) 
+
+main = do
+  links <- getAllLinks [x * 10 | x <- [0..46]]--mapM_ download links
   parallel_ $ map download links 
   stopGlobalPool
-  return $ (length links) == 0
-
-main = mapM_ crawlPaperFromIndex [x*10 | x <- [0..46]]
