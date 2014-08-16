@@ -15,32 +15,41 @@ import Control.Concurrent.ParallelIO
 import Data.List
 import Data.List.Split
 
-urlToCrawl :: String
-urlToCrawl = "http://search.arxiv.org:8081/?query=%22big+data%22+OR+cloud+OR+%22machine+learning%22+OR+%22artificial+intelligence%22+OR+%22distributed+computing%22&qid=13871620873749a_nCnN_-288443966"
+baseUrlToCrawl :: String
+baseUrlToCrawl = "http://search.arxiv.org:8081/?query=%22big+data%22+OR+cloud+OR+%22machine+learning%22+OR+%22artificial+intelligence%22+OR+%22distributed+computing%22&qid=13871620873749a_nCnN_-288443966"
+
+indexStep :: Int
+indexStep = 10
 
 -- helper function for getting page content
 
-getUrlResponseWithRedirect :: URI -> IO String
-getUrlResponseWithRedirect u = do
-    result <- simpleHTTP (mkRequest GET u) :: IO (Result (Response String))
-    let Right resp = result
-    let (Response respCode _ headers _) = resp
-    if (respCode == (3,0,2)) then (
-        let location = head $ [content | (Header name content) <- headers, name == HdrLocation] in
-        let Just u = parseURI location in
-        getUrlResponseWithRedirect u) else (getResponseBody result)
+getUrlResponseWithRedirect :: HStream t0 => URI -> IO t0 
+getUrlResponseWithRedirect u = getUrlResponseWithRedirect_ u 3
+    where  
+        getUrlResponseWithRedirect_ u numRetry = do
+            result <- simpleHTTP (mkRequest GET u) 
+            case result of
+                Right resp -> getResponseContent resp
+                Left _ -> if (numRetry > 0) then (getUrlResponseWithRedirect u) else (getResponseBody result)
+            where
+                getResponseContent resp = let (Response respCode _ headers _ ) = resp in
+                    if (respCode == (3,0,2)) then (
+                        let location = head $ [content | (Header name content) <- headers, name == HdrLocation] in
+                        let Just u = parseURI location in
+                        getUrlResponseWithRedirect u) 
+                    else (getResponseBody (Right resp))
 
-openUrl :: String -> MaybeT IO String
+openUrl :: HStream t0 => String -> MaybeT IO t0
 openUrl url = case parseURI url of
     Nothing -> fail ""
-    Just u  -> liftIO (getResponseBody =<< simpleHTTP (mkRequest GET u))
+    Just u  -> liftIO (getUrlResponseWithRedirect u)--(getResponseBody =<< simpleHTTP (mkRequest GET u))
 
 css :: ArrowXml a => String -> a XmlTree XmlTree
 css tag = multi (hasName tag)
 
 get :: String -> IO (IOSArrow XmlTree (NTree XNode))
 get url = do
-  contents <- runMaybeT $ openUrl url
+  contents <- runMaybeT (openUrl url :: MaybeT IO String)
   return $ readString [withParseHTML yes, withWarnings no] (fromMaybe "" contents)
 
 paperAbsLinks tree = tree >>> css "table" >>> css "a" >>> hasAttrValue "class" (== "url") >>> deep isText >>> getText
@@ -57,18 +66,29 @@ parseArgs = do
        otherwise -> error "usage: grabber [url]"
 
 download absLink = do
-  putStrLn $ "getting abs link " ++ absLink
+  --putStrLn $ "getting abs link " ++ absLink
   doc <- get absLink
   urls <- runX $ pdfLink "http://arxiv.org" doc
   let url = head urls
   putStrLn $ "downloading " ++ url
   let path = uriPath $ fromJust $ parseURI url 
   let name = (last (Data.List.Split.splitOn "/" path)) ++ ".pdf"
-  putStrLn $name
-  putStrLn $path
+  --putStrLn $name
+  --putStrLn $path
+  content <- runMaybeT (openUrl url :: MaybeT IO B.ByteString)
+  case content of
+       Nothing -> putStrLn $ "bad url: " ++ url
+       Just _content -> do
+          B.writeFile name _content--(B.pack _content)
 
-main = do
+crawlPaperFromIndex :: Int -> IO Bool 
+crawlPaperFromIndex index = do
+  let urlToCrawl = if (index == 0) then (baseUrlToCrawl) else (baseUrlToCrawl ++ "&startat=" ++ (show index))
   doc <- get urlToCrawl 
   links <- runX . paperAbsLinks $ doc
+  --mapM_ download links
   parallel_ $ map download links 
   stopGlobalPool
+  return $ (length links) == 0
+
+main = mapM_ crawlPaperFromIndex [x*10 | x <- [0..46]]
