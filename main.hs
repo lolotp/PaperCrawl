@@ -53,9 +53,9 @@ get url = do
   return $ readString [withParseHTML yes, withWarnings no] (fromMaybe "" contents)
 
 paperAbsLinks tree = tree >>> css "table" >>> css "a" >>> hasAttrValue "class" (== "url") >>> deep isText >>> getText
-pdfLink domain tree = tree >>> css "a" 
-    >>> hasAttrValue "accesskey" (=="f") 
-    >>> ( (deep (hasText (isPrefixOf "PDF"))) `guards` this) 
+fileLink domain tree fileType = tree >>> css "a"
+    >>> hasAttrValue "accesskey" (=="f")
+    >>> ( (deep (hasText (isPrefixOf fileType))) `guards` this) 
     >>> getAttrValue "href"
     >>> arr (\ relativePath -> domain ++ relativePath)
 
@@ -64,22 +64,33 @@ parseArgs = do
   case args of
        (url:[]) -> return url
        otherwise -> error "usage: grabber [url]"
-
+getValidUrl :: IOSArrow XmlTree (NTree XNode) -> IO (String,String)
+getValidUrl doc = do
+  urls <- runX $ fileLink "http://arxiv.org" doc "PDF"
+  if length urls == 0 then (
+    do
+      urls <-  runX $ fileLink "http://arxiv.org" doc "HTML"
+      return ((head urls),".html"))
+  else (do
+    let url =  head urls
+    return (url,".pdf"))
+  
+ 
 download absLink = do
   --putStrLn $ "getting abs link " ++ absLink
   doc <- get absLink
-  urls <- runX $ pdfLink "http://arxiv.org" doc
-  let url = head urls
+  (url,extension) <- getValidUrl doc
   putStrLn $ "downloading " ++ url
   let path = uriPath $ fromJust $ parseURI url 
-  let name = (last (Data.List.Split.splitOn "/" path)) ++ ".pdf"
+  let name = (last (Data.List.Split.splitOn "/" path)) ++ extension
   --putStrLn $name
   --putStrLn $path
   content <- runMaybeT (openUrl url :: MaybeT IO B.ByteString)
   case content of
-       Nothing -> putStrLn $ "bad url: " ++ url
-       Just _content -> do
-          B.writeFile name _content--(B.pack _content)
+     Nothing -> putStrLn $ "bad url: " ++ url
+     Just _content -> do
+        B.writeFile name _content
+
 
 crawlPaperFromIndex :: Int -> IO [String] 
 crawlPaperFromIndex index = do
@@ -98,6 +109,6 @@ getAllLinks indexList = do
     return (links++links2) 
 
 main = do
-  links <- getAllLinks [x * 10 | x <- [0..46]]--mapM_ download links
+  links <- getAllLinks [x * 10 | x <- [0..46]]
   parallel_ $ map download links 
   stopGlobalPool
