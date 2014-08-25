@@ -70,21 +70,22 @@ getValidUrl doc = do
   if length urls == 0 then (
     do
       urls <-  runX $ fileLink "http://arxiv.org" doc "HTML"
-      return ((head urls),".html"))
+      if length urls == 0 then (
+        return ("",".html")) else (
+        return ((head urls),".html")))
   else (do
     let url =  head urls
     return (url,".pdf"))
   
  
 download absLink = do
-  --putStrLn $ "getting abs link " ++ absLink
   doc <- get absLink
   (url,extension) <- getValidUrl doc
-  putStrLn $ "downloading " ++ url
+  if url == "" then (do
+    putStrLn $ show absLink) else (do
+    putStrLn $ "downloading " ++ url)
   let path = uriPath $ fromJust $ parseURI url 
   let name = (last (Data.List.Split.splitOn "/" path)) ++ extension
-  --putStrLn $name
-  --putStrLn $path
   content <- runMaybeT (openUrl url :: MaybeT IO B.ByteString)
   case content of
      Nothing -> putStrLn $ "bad url: " ++ url
